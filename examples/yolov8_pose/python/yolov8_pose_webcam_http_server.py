@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import cv2
 import numpy as np
 
+# Import RKNN API (try main library first, fallback to lite version if unavailable)
 try:
     from rknn.api import RKNN
 except ImportError:
@@ -17,10 +18,10 @@ except ImportError:
     from rknnlite.api import RKNNLite as RKNN
 
 
-CLASSES = ['person']
+CLASSES = ['person'] # List of object classes to detect
 
-nmsThresh = 0.4
-objectThresh = 0.5
+nmsThresh = 0.4 # NMS (Non-Maximum Suppression) threshold for filtering overlapping detections
+objectThresh = 0.5 # Confidence threshold for object detection
 
 
 class SharedState:
@@ -76,6 +77,19 @@ class DetectBox:
 
 
 def IOU(xmin1, ymin1, xmax1, ymax1, xmin2, ymin2, xmax2, ymax2):
+    """
+    Calculate the Intersection over Union (IOU) of two bounding boxes.
+    
+    :param xmin1: minimum x-coordinate of first bounding box
+    :param ymin1: minimum y-coordinate of first bounding box
+    :param xmax1: maximum x-coordinate of first bounding box
+    :param ymax1: maximum y-coordinate of first bounding box
+    :param xmin2: minimum x-coordinate of second bounding box
+    :param ymin2: minimum y-coordinate of second bounding box
+    :param xmax2: maximum x-coordinate of second bounding box
+    :param ymax2: maximum y-coordinate of second bounding box
+    :return: IOU value (intersection area / union area)
+    """
     xmin = max(xmin1, xmin2)
     ymin = max(ymin1, ymin2)
     xmax = min(xmax1, xmax2)
@@ -98,6 +112,15 @@ def IOU(xmin1, ymin1, xmax1, ymax1, xmin2, ymin2, xmax2, ymax2):
 
 
 def NMS(detectResult):
+    """
+    Perform Non-Maximum Suppression (NMS) on detection results.
+    
+    Removes duplicate detections by suppressing boxes with high Intersection over Union (IOU)
+    for the same class. Boxes are processed in order of descending confidence score.
+    
+    :param detectResult: list of detection objects with attributes (xmin, ymin, xmax, ymax, classId, score)
+    :return: list of detection objects after NMS filtering
+    """
     predBoxs = []
 
     sort_detectboxs = sorted(detectResult, key=lambda x: x.score, reverse=True)
@@ -124,16 +147,47 @@ def NMS(detectResult):
 
 
 def sigmoid(x):
+    """
+    Apply sigmoid activation function.
+    
+    :param x: input array or scalar
+    :return: sigmoid(x) = 1 / (1 + exp(-x))
+    """
     return 1 / (1 + np.exp(-x))
 
 
 def softmax(x, axis=-1):
+    """
+    Apply softmax activation function.
+    
+    Normalizes input to probability distribution. Subtracts max for numerical stability.
+    
+    :param x: input array
+    :param axis: axis along which to apply softmax (default: -1)
+    :return: softmax(x) normalized along specified axis
+    """
     # Subtracting the maximum value from the input vector improves numerical stability.
     exp_x = np.exp(x - np.max(x, axis=axis, keepdims=True))
     return exp_x / np.sum(exp_x, axis=axis, keepdims=True)
 
 
 def process(out, keypoints, index, model_w, model_h, stride, scale_w=1, scale_h=1):
+    """
+    Process YOLOv8 pose detection output and decode bounding boxes with keypoints.
+    
+    Decodes model predictions into detection boxes with pose keypoints. Applies spatial
+    transformations to convert model coordinates to image coordinates.
+    
+    :param out: raw model output predictions (xywh and confidence scores)
+    :param keypoints: decoded keypoint coordinates from model
+    :param index: starting index for keypoint extraction
+    :param model_w: model output width
+    :param model_h: model output height
+    :param stride: stride of feature map relative to input
+    :param scale_w: width scale factor for coordinate conversion (default: 1)
+    :param scale_h: height scale factor for coordinate conversion (default: 1)
+    :return: list of DetectBox objects with bounding boxes and keypoints
+    """
     xywh = out[:, :64, :]
     conf = sigmoid(out[:, 64:, :])
     out = []
@@ -171,62 +225,31 @@ def process(out, keypoints, index, model_w, model_h, stride, scale_w=1, scale_h=
 
     return out
 
-
-pose_palette = np.array(
-    [
-        [255, 128, 0],
-        [255, 153, 51],
-        [255, 178, 102],
-        [230, 230, 0],
-        [255, 153, 255],
-        [153, 204, 255],
-        [255, 102, 255],
-        [255, 51, 255],
-        [102, 178, 255],
-        [51, 153, 255],
-        [255, 153, 153],
-        [255, 102, 102],
-        [255, 51, 51],
-        [153, 255, 153],
-        [102, 255, 102],
-        [51, 255, 51],
-        [0, 255, 0],
-        [0, 0, 255],
-        [255, 0, 0],
-        [255, 255, 255],
-    ],
-    dtype=np.uint8,
-)
-kpt_color = pose_palette[[16, 16, 16, 16, 16, 0, 0, 0, 0, 0, 0, 9, 9, 9, 9, 9, 9]]
-skeleton = [
-    [16, 14],
-    [14, 12],
-    [17, 15],
-    [15, 13],
-    [12, 13],
-    [6, 12],
-    [7, 13],
-    [6, 7],
-    [6, 8],
-    [7, 9],
-    [8, 10],
-    [9, 11],
-    [2, 3],
-    [1, 2],
-    [1, 3],
-    [2, 4],
-    [3, 5],
-    [4, 6],
-    [5, 7],
-]
+# RGB color palette for pose visualization (20 colors)
+pose_palette = np.array([[255, 128, 0], [255, 153, 51], [255, 178, 102], [230, 230, 0], [255, 153, 255],
+                         [153, 204, 255], [255, 102, 255], [255, 51, 255], [102, 178, 255], [51, 153, 255],
+                         [255, 153, 153], [255, 102, 102], [255, 51, 51], [153, 255, 153], [102, 255, 102],
+                         [51, 255, 51], [0, 255, 0], [0, 0, 255], [255, 0, 0], [255, 255, 255]],dtype=np.uint8)
+# Keypoint colors indexed from pose_palette
+kpt_color  = pose_palette[[16, 16, 16, 16, 16, 0, 0, 0, 0, 0, 0, 9, 9, 9, 9, 9, 9]]
+# Bone connections between keypoints
+skeleton = [[16, 14], [14, 12], [17, 15], [15, 13], [12, 13], [6, 12], [7, 13], [6, 7], [6, 8],
+            [7, 9], [8, 10], [9, 11], [2, 3], [1, 2], [1, 3], [2, 4], [3, 5], [4, 6], [5, 7]]
+# Limb/bone colors for skeleton visualization
 limb_color = pose_palette[[9, 9, 9, 9, 7, 7, 7, 0, 0, 0, 0, 0, 16, 16, 16, 16, 16, 16, 16]]
-
 
 class StreamHandler(BaseHTTPRequestHandler):
     shared_state = None
     stop_event = None
 
     def _write_bytes(self, status, body, content_type='text/plain; charset=utf-8'):
+        """Send HTTP response with headers and body.
+        
+        Args:
+            status: HTTP status code (e.g., HTTPStatus.OK).
+            body: Response body as bytes.
+            content_type: MIME type of the response body. Defaults to 'text/plain; charset=utf-8'.
+        """
         self.send_response(status)
         self.send_header('Content-Type', content_type)
         self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
@@ -237,6 +260,14 @@ class StreamHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        """Handle HTTP GET requests for various endpoints.
+        
+        Supports the following endpoints:
+        - '/': Returns an HTML page with embedded MJPEG stream viewer
+        - '/healthz': Returns JSON health status including client count, frame count, and uptime
+        - '/snapshot.jpg': Returns the latest JPEG frame as an image
+        - '/stream.mjpg': Streams live MJPEG video feed to the client
+        """
         if self.path == '/':
             page = (
                 '<!doctype html>'
@@ -320,6 +351,22 @@ class StreamHandler(BaseHTTPRequestHandler):
 
 
 def create_http_server(host, port, shared_state, stop_event):
+    """
+    Create and configure an HTTP server for streaming video frames.
+    
+    Sets up a multi-threaded HTTP server that streams JPEG frames over HTTP.
+    The server uses a shared state object to coordinate frame updates between
+    the main processing thread and client connection handlers.
+    
+    Args:
+        host: Hostname or IP address to bind the server to.
+        port: Port number for the HTTP server.
+        shared_state: Shared state object containing frame data and synchronization primitives.
+        stop_event: Threading event to signal server shutdown.
+    
+    Returns:
+        ThreadingHTTPServer: Configured HTTP server instance ready to serve requests.
+    """
     StreamHandler.shared_state = shared_state
     StreamHandler.stop_event = stop_event
     server = ThreadingHTTPServer((host, port), StreamHandler)
@@ -328,38 +375,74 @@ def create_http_server(host, port, shared_state, stop_event):
 
 
 def draw_pose(img, predbox, aspect_ratio, offset_x, offset_y):
-    for i in range(len(predbox)):
+    """
+    Draw pose detection results on an image.
+    
+    Draws bounding boxes, keypoints, and skeleton connections for detected poses.
+    
+    Args:
+        img: Input image to draw on (modified in-place).
+        predbox: List of prediction objects containing bounding box and keypoint data.
+        aspect_ratio: Scaling factor for coordinate adjustment.
+        offset_x: X-axis offset for coordinate transformation.
+        offset_y: Y-axis offset for coordinate transformation.
+    
+    Returns:
+        None. The input image is modified in-place.
+    """
+    for i in range(len(predbox)): # Loop through each detected bounding box and draw it on the image
+        # Transform bounding box coordinates from model space to image space
         xmin = int((predbox[i].xmin - offset_x) / aspect_ratio)
         ymin = int((predbox[i].ymin - offset_y) / aspect_ratio)
         xmax = int((predbox[i].xmax - offset_x) / aspect_ratio)
         ymax = int((predbox[i].ymax - offset_y) / aspect_ratio)
+        
         classId = predbox[i].classId
         score = predbox[i].score
-        cv2.rectangle(img, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
         ptext = (xmin, ymin)
         title = CLASSES[classId] + '%.2f' % score
-
-        cv2.putText(img, title, ptext, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
-        keypoints = predbox[i].keypoint.reshape(-1, 3)  # keypoint [x, y, conf]
+        
+        # Transform keypoint coordinates from model space to image space
+        keypoints = predbox[i].keypoint.reshape(-1, 3)
         keypoints[..., 0] = (keypoints[..., 0] - offset_x) / aspect_ratio
         keypoints[..., 1] = (keypoints[..., 1] - offset_y) / aspect_ratio
+        
+        # Draw the bounding box on the image
+        cv2.rectangle(img, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
+        # Draw the class label and confidence score on the image
+        cv2.putText(img, title, ptext, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
 
-        for k, keypoint in enumerate(keypoints):
+        for k, keypoint in enumerate(keypoints): # Loop through each keypoint and draw it on the image
             x, y, conf = keypoint
             color_k = [int(x) for x in kpt_color[k]]
             if x != 0 and y != 0:
+                # Draw a circle at the keypoint location on the image
                 cv2.circle(img, (int(x), int(y)), 5, color_k, -1, lineType=cv2.LINE_AA)
 
-        for k, sk in enumerate(skeleton):
+        for k, sk in enumerate(skeleton): # Loop through each skeleton connection and draw it on the image
             pos1 = (int(keypoints[(sk[0] - 1), 0]), int(keypoints[(sk[0] - 1), 1]))
             pos2 = (int(keypoints[(sk[1] - 1), 0]), int(keypoints[(sk[1] - 1), 1]))
 
-            if pos1[0] == 0 or pos1[1] == 0 or pos2[0] == 0 or pos2[1] == 0:
+            if pos1[0] == 0 or pos1[1] == 0 or pos2[0] == 0 or pos2[1] == 0: # If either keypoint is not detected (coordinates are zero), skip drawing the skeleton connection
                 continue
+            # Draw a line between the two keypoints to represent the limb/bone on the image
             cv2.line(img, pos1, pos2, [int(x) for x in limb_color[k]], thickness=2, lineType=cv2.LINE_AA)
 
 
 def resolve_runtime_target(target):
+    """
+    Resolve the runtime target, accounting for native Linux ARM64 systems.
+    
+    On native Linux ARM64 (aarch64 or arm64) systems, this function ignores
+    the provided target parameter and returns None to use the local RKNN Lite runtime
+    instead of a remote target.
+    
+    Args:
+        target: The specified runtime target, or None.
+    
+    Returns:
+        None if running on native Linux ARM64, otherwise returns the original target.
+    """
     if target and platform.system() == 'Linux' and platform.machine().lower() in ('aarch64', 'arm64'):
         print('Native Linux Arm64 detected; ignoring --target and using the local RKNN Lite runtime.')
         return None
@@ -367,6 +450,29 @@ def resolve_runtime_target(target):
 
 
 def infer_and_stream(args):
+    """
+    Load an RKNN pose detection model and perform inference on webcam frames with HTTP streaming.
+    
+    This function captures frames from a webcam, runs YOLOv8 pose detection inference using RKNN,
+    draws pose keypoints and skeletal connections on the frames, and streams the results via HTTP
+    in MJPEG format. Handles graceful shutdown via Ctrl+C.
+    
+    Args:
+        args: Argument namespace containing:
+            - model_path (str): Path to the RKNN model file (.rknn)
+            - target (str): Target RKNPU platform (None for local runtime)
+            - device_id (str): Device ID for RKNN runtime
+            - host (str): HTTP server bind address (default: '0.0.0.0')
+            - port (int): HTTP server bind port (default: 8080)
+            - jpeg_quality (int): JPEG compression quality 1-100 (default: 80)
+            - max_fps (float): Maximum output FPS; 0 for unlimited (default: 0)
+            - camera_index (int): OpenCV camera device index (default: 0)
+            - camera_width (int): Camera capture width (default: 640)
+            - camera_height (int): Camera capture height (default: 480)
+    
+    Returns:
+        int: 0 on successful completion, non-zero error codes on failure.
+    """
     stop_event = threading.Event()
     shared_state = SharedState()
 
@@ -495,6 +601,22 @@ def infer_and_stream(args):
 
 
 def parse_args():
+    """
+    Parse and return command-line arguments for the YOLOv8 Pose HTTP streaming application.
+    
+    Returns:
+        argparse.Namespace: Parsed command-line arguments containing:
+            - model_path (str): Path to the RKNN model file (required)
+            - target (str): Target RKNPU platform (optional)
+            - device_id (str): Device ID for the RKNPU (optional)
+            - host (str): HTTP server bind host (default: '0.0.0.0')
+            - port (int): HTTP server bind port (default: 8080)
+            - jpeg_quality (int): JPEG quality for stream output 1-100 (default: 80)
+            - max_fps (float): Maximum FPS limit; 0 means uncapped (default: 0.0)
+            - camera_index (int): Camera device index for OpenCV (default: 0)
+            - camera_width (int): Camera capture width in pixels (default: 640)
+            - camera_height (int): Camera capture height in pixels (default: 480)
+    """
     parser = argparse.ArgumentParser(description='Yolov8 Pose Webcam HTTP Streaming Demo', add_help=True)
     parser.add_argument('--model_path', type=str, required=True, help='model path, should be .rknn file')
     parser.add_argument('--target', type=str, default=None, help='target RKNPU platform')
